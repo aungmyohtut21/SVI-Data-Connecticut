@@ -1,0 +1,250 @@
+---
+title: "Columbus Public Health"
+author: "Aung Myo Htut"
+date: "2024-02-06"
+output:
+  
+  html_document: default
+  always_allow_html: true
+  latex_engine: xelatex
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Load the library
+```{r load library, warning = FALSE, message=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(tools)
+library(openxlsx)
+library(maps)
+library(sf)
+library(labelled)
+library(table1)
+library(kableExtra)
+library(knitr)
+library(webshot)
+```
+
+#SVI and Select variables of interest
+```{r SVI}
+svi <- read_csv("CDC_2020_SVI_Connecticut_County_Level.csv", show_col_types = FALSE)
+
+#Select Variables of Interest out of 158 Variables
+cdc_svi <- svi %>% 
+  select("COUNTY", "E_TOTPOP", "E_HU", "E_HH", "E_POV150", "E_UNEMP","E_NOHSDP",
+         "E_UNINSUR", "E_AGE65", "E_AGE17", "E_DISABL", "E_SNGPNT", "E_MINRTY")
+
+#Rename variables
+names(cdc_svi) <- c("county", "total_pop", "housing_units", "households", "belowpov150", "unemployment",
+                    "nohsdp", "uninsured", "age65","age17", "disablity", "single_parent", "race_minority")
+
+```
+
+#Handling Shapefile Data for Connecticut Counties
+```{r shapefile, warning=FALSE}
+#Save original working directory
+original_wd <- getwd()
+
+#Change working directory for this task
+setwd("C:/Users/draun/Desktop/Columbus Public Health/cb_2018_us_county_500k")
+
+#Load shape file
+my_shape <- st_read("C:/Users/draun/Desktop/Columbus Public Health/cb_2018_us_county_500k/cb_2018_us_county_500k.shp")
+
+# Define the list of county names
+counties <- c("Fairfield", "Hartford", "Litchfield", "Middlesex", "New Haven", "New London", "Tolland", "Windham")
+
+# Filter the dataset
+filtered_dataset <- my_shape %>%
+                    filter(NAME %in% counties) %>%
+                    filter (STATEFP %in% "09")
+
+
+
+#Rename variables
+shapefile <- filtered_dataset %>%
+  rename(
+    "statefp" = "STATEFP",
+    "countyfp" = "COUNTYFP",
+    "countyns" = "COUNTYNS",
+    "affgeoid" = "AFFGEOID",
+    "geoid" = "GEOID",
+    "county" = "NAME",
+    "lsad" = "LSAD",
+    "aland" = "ALAND",
+    "awater" = "AWATER",
+    "geometry" = "geometry"
+
+  )
+
+#Revert back to original working directory
+setwd(original_wd)
+
+# #Export to shapefile
+# st_write(shapefile,"C:/Users/draun/Desktop/Columbus Public Health/Shapefile/my_shapefile.shp")
+```
+
+#Load Death Data and Aggregate at County Level
+```{r death data}
+#Load the data
+death_data <- read_csv("Connecticut_Accidental_Drug_Related_Deaths_2012-2022.csv", show_col_types = F)
+
+#Filter Data
+death_data <-death_data[,3:9]
+
+#Rename Columns
+names(death_data) <- c("age", "sex", "race","ethnicity", "city", "county", "state")
+
+#Filter only people from Connecticut
+death_filter <- death_data %>% filter(state == "CT")
+
+# Change all capital cases To Lower case observations
+death_filter$county <- toTitleCase(tolower(death_filter$county))
+head(death_filter)
+
+#Aggregate the death data by county
+death_data_aggregate <- death_filter %>%
+  group_by(county) %>%
+  summarise(total_deaths = n())
+
+
+# Remove observations with specified county names and NA values
+new_death <- death_data_aggregate[!(death_data_aggregate$county %in% c("Middlesez", "Newlondon", "Plymouth") | is.na(death_data_aggregate$county)), ]
+
+# View the modified dataset
+head(new_death, n = 8)
+
+```
+#Join the Datasets
+```{r data joining}
+#Joining Data
+combined_data <- left_join(cdc_svi, new_death, by = "county")
+head(combined_data)
+```
+
+#Exporting to Excel File
+```{r Exporting Data}
+#Exporting Data
+#write.xlsx(combined_data,"data.xlsx")
+```
+
+#Merge the datab and create table
+```{r merging, warning=FALSE}
+# Merge the shapefile data with the merged_data
+map_data <- merge(shapefile, combined_data, by = "county")
+
+#labeling variables
+var_label(map_data) <-
+  list(county = "County",
+       statefp = "State FP Codes",
+       countyfp = "County FP Codes",
+       countyns = "Countyns",
+       affgeoid = "Affgeoid",
+       geoid = "Geo ID",
+       lsad = "lsad",
+       aland = "aland",
+       awater = "awater",
+       total_pop = "Total Population",
+       housing_units = "Housing Units Estimate",
+       households = "Households Estimate",
+       belowpov150 = "Persons Below 150% Poverty Estimate",
+       unemployment = "Civilian (age+) unemployed estimate",
+       nohsdp = "Persons (age25+) with no high school diploma",
+       uninsured = "Uninsured population",
+       age65 = "Persons aged 65 and older",
+       age17 = "Persons aged 17 and younger",
+       disablity = "Population with disability",
+       single_parent = "Single parent household with children < 18",
+       race_minority = "Minority Race",
+       total_deaths = "Total Deaths",
+       geometry = "Geometry")
+
+#Table
+table <- table1(~ total_pop + housing_units + households + belowpov150 + unemployment + nohsdp +
+         uninsured + age65 + age17 + disablity + single_parent + race_minority + 
+         total_deaths, data = map_data, overall = "Total")
+#table
+
+#Format Table
+kable_table <- kable(table, format = "html", row.names = FALSE,escape = TRUE)
+
+format_table <- kable_table %>% 
+  kable_styling(full_width = FALSE) %>%
+  row_spec(row = 0, color = "white", background = "#FF5733", font_size = 15)%>% #for title
+  row_spec(row = 2, bold = TRUE, font_size = 13) %>% #bold each variable
+  row_spec(row = 5, bold = TRUE, font_size = 13) %>%
+  row_spec(row = 8, bold = TRUE, font_size = 13) %>%
+  row_spec(row = 11, bold = TRUE, font_size = 13) %>%
+  row_spec(row = 14, bold = TRUE, font_size = 13) %>%
+  row_spec(row = 17, bold = TRUE, font_size = 13) %>%
+  row_spec(row = 20, bold = TRUE, font_size = 13) %>%
+  row_spec(row = 23, bold = TRUE, font_size = 13) %>%
+  row_spec(row = 26, bold = TRUE, font_size = 13) %>%
+  row_spec(row = 29, bold = TRUE, font_size = 13) %>%
+  row_spec(row = 32, bold = TRUE, font_size = 13) %>%
+  row_spec(row = 35, bold = TRUE, font_size = 13) %>%
+  row_spec(row = 38, bold = TRUE, font_size = 13)
+
+format_table
+```
+
+#Choropleth County and Unemployment Estimate
+```{r map, warning=FALSE}
+#Plotting
+ggplot(map_data) +
+  geom_sf(aes(fill = unemployment)) +
+  geom_sf_text(aes(label = county), size = 3, color = "darkred") +
+  labs(title = "Unemployment Estimates in the State of Conneticut",
+       fill = "Unemployment") +
+  scale_fill_gradient(low = "lightcyan", high = "deepskyblue4") +
+  theme_void() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12))
+```
+
+#Choropleth Map of Deaths in Counties
+```{r, warning=FALSE}
+# Create a new column for labels
+map_data$label <- paste(map_data$county, map_data$total_deaths, sep = ": ")
+
+# Plotting
+ggplot(map_data) +
+  geom_sf(aes(fill = total_deaths)) +
+  geom_sf_text(aes(label = label), size = 3, color = "orange") +  # Corrected this line
+  labs(title = "Drug Related Total Deaths in Connecitcut", fill = "Deaths") +
+  scale_fill_gradient(low = "lightcyan", high = "dodgerblue4") +
+  theme_void() + 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12))
+
+```
+
+#Poverty Vs Total Death Scatter Plot
+```{r Poverty vs death}
+#I know this wouldn't look good because of too few points
+#There is still positive relation though
+ggplot(map_data, aes(x = belowpov150, y = total_deaths)) +
+  geom_point() +
+  labs(x = "Population Below 150% of Poverty Line",
+       y = "Drug Related Total Deaths",
+       title = "Poverty vs. Total Deaths by County")
+
+```
+
+#Bar Chart of Minority Population:
+```{r}
+ggplot(map_data, aes(x = county, y = race_minority)) +
+  geom_col(fill = "darkolivegreen4")+
+  geom_text(aes(label = race_minority), vjust = -0.5, color = "red", size = 2.5) +
+  scale_y_continuous(breaks = c(seq(0,400000,40000))) +
+  labs(x = "County",
+       y = "Minority Population",
+       title = "Minority Population by County in Conneticut") +
+  theme_classic() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12))
+
+```
+
